@@ -1,0 +1,232 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Jan5n | 進化系戦略じゃんけん</title>
+    <style>
+        :root { --primary: #00d4ff; --accent: #ff4757; --bg: #0f172a; --card-bg: rgba(255, 255, 255, 0.08); }
+        body { margin: 0; background: var(--bg); color: white; font-family: sans-serif; display: flex; flex-direction: column; align-items: center; min-height: 100vh; }
+        .header { font-size: clamp(2.5rem, 12vw, 4rem); font-weight: 900; background: linear-gradient(to bottom, #fff, var(--primary)); -webkit-background-clip: text; -webkit-text-fill-color: transparent; margin: 20px 0; font-style: italic; }
+        .panel { background: var(--card-bg); backdrop-filter: blur(15px); border: 1px solid rgba(255,255,255,0.1); border-radius: 24px; padding: 20px; width: 90%; max-width: 500px; text-align: center; }
+        .btn { padding: 16px; font-size: 1rem; font-weight: 800; border-radius: 16px; border: none; cursor: pointer; transition: 0.2s; width: 100%; margin: 8px 0; }
+        .btn-main { background: var(--primary); color: #000; }
+        .btn-blue { background: #334155; color: white; }
+        .card-grid { display: flex; flex-wrap: wrap; justify-content: center; gap: 10px; margin: 15px 0; }
+        .card { width: clamp(75px, 25vw, 95px); height: clamp(105px, 35vw, 130px); background: rgba(255,255,255,0.05); border: 2px solid rgba(255,255,255,0.2); border-radius: 16px; display: flex; flex-direction: column; align-items: center; justify-content: center; cursor: pointer; transition: 0.2s; }
+        .card.selected { border-color: var(--primary); background: rgba(0,212,255,0.15); transform: translateY(-5px); }
+        .card.disabled { opacity: 0.2; pointer-events: none; }
+        .card.back { background: linear-gradient(135deg, #1e293b, #0f172a); border-color: var(--primary); color: var(--primary); font-size: 2rem; }
+        .hidden { display: none !important; }
+        #status-msg { font-size: 1.1rem; font-weight: bold; min-height: 3em; margin: 15px 0; color: var(--primary); line-height: 1.4; }
+        input { background: rgba(0,0,0,0.3); border: 2px solid var(--primary); color: white; padding: 12px; border-radius: 12px; text-align: center; font-size: 1.2rem; width: 80%; outline: none; }
+    </style>
+</head>
+<body>
+
+    <div class="header">Jan5n</div>
+
+    <div id="screen-menu" class="panel">
+        <button class="btn btn-blue" onclick="startMode('cpu')">CPU 対戦</button>
+        <button class="btn btn-main" onclick="startMode('random')">ランダムマッチ</button>
+        <hr style="opacity:0.1; margin: 20px 0;">
+        <input type="number" id="room-id" pattern="\d*" placeholder="5桁の数字">
+        <div style="display:flex; gap:8px;">
+            <button class="btn btn-blue" style="font-size:0.85rem" onclick="startMode('create')">作成</button>
+            <button class="btn btn-blue" style="font-size:0.85rem" onclick="startMode('join')">参加</button>
+        </div>
+    </div>
+
+    <div id="screen-setup" class="panel hidden">
+        <h3>デッキ構築 (3枚選んで)</h3>
+        <div class="card-grid">
+            <div class="card" id="p-gu" onclick="pickCard('✊', 'p-gu')">✊<br>グー</div>
+            <div class="card" id="p-cho" onclick="pickCard('✌️', 'p-cho')">✌️<br>チョキ</div>
+            <div class="card" id="p-pa" onclick="pickCard('🖐️', 'p-pa')">🖐️<br>パー</div>
+            <div class="card" id="p-kami" onclick="pickCard('✨', 'p-kami')" style="color:gold">✨<br>神</div>
+            <div class="card" id="p-kaga" onclick="pickCard('🪞', 'p-kaga')" style="color:silver">🪞<br>鏡</div>
+        </div>
+        <p id="setup-count">あと 3 枚</p>
+        <button id="btn-ready" class="btn btn-main hidden" onclick="confirmDeck()">準備完了</button>
+    </div>
+
+    <div id="screen-battle" class="panel hidden">
+        <div id="cpu-hand-ui" class="card-grid"></div>
+        <div id="status-msg">マッチング完了！<br>対戦準備中...</div>
+        <div id="player-hand-ui" class="card-grid"></div>
+    </div>
+
+    <div id="screen-result" class="panel hidden">
+        <h1 id="res-title"></h1>
+        <div id="res-log" style="text-align: left; padding: 10px; font-size: 0.9rem; line-height: 1.6;"></div>
+        <button class="btn btn-main" onclick="location.reload()">メニューに戻る</button>
+    </div>
+
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
+        import { getDatabase, ref, set, onValue, onDisconnect, remove, get } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-database.js";
+
+        const firebaseConfig = {
+            apiKey: "AIzaSyCMtqBaPLHyb4RAbvAz-EOet6TN0kLg4B8",
+            authDomain: "jan5n-b05c4.firebaseapp.com",
+            projectId: "jan5n-b05c4",
+            storageBucket: "jan5n-b05c4.firebasestorage.app",
+            messagingSenderId: "204638282611",
+            appId: "1:204638282611:web:7d45c717f6b82e846ddb06"
+        };
+
+        const app = initializeApp(firebaseConfig);
+        const db = getDatabase(app);
+
+        let mode = ""; 
+        let myDeck = [];
+        let myRole = ""; 
+        let roomPath = "";
+        let turn = 0;
+        let wins = 0;
+        let logs = [];
+        let opponentDeck = [];
+        let myMove = null;
+
+        window.startMode = async (selectedMode) => {
+            mode = selectedMode;
+            if(mode === 'cpu') {
+                showScreen('setup');
+            } else {
+                const rid = (mode === 'random') ? "99999" : document.getElementById('room-id').value;
+                if(!rid || rid.length < 1) return alert("番号を入力してください");
+                
+                roomPath = `rooms/${rid}`;
+                const rRef = ref(db, roomPath);
+                const snapshot = await get(rRef);
+                const data = snapshot.val();
+
+                if (!data || !data.p1) {
+                    myRole = "p1";
+                    await set(ref(db, roomPath + "/p1"), { active: true });
+                } else {
+                    myRole = "p2";
+                    await set(ref(db, roomPath + "/p2"), { active: true });
+                }
+
+                document.getElementById('screen-menu').innerHTML = "<h3>マッチング中...</h3><p>相手を待っています</p>";
+                onValue(rRef, (snap) => {
+                    const d = snap.val();
+                    if (d && d.p1 && d.p2) showScreen('setup');
+                });
+                onDisconnect(rRef).remove();
+            }
+        };
+
+        window.pickCard = (type, id) => {
+            if (myDeck.length < 3) {
+                myDeck.push(type);
+                document.getElementById(id).classList.add('selected');
+                document.getElementById('setup-count').innerText = `あと ${3 - myDeck.length} 枚`;
+            }
+            if (myDeck.length === 3) document.getElementById('btn-ready').classList.remove('hidden');
+        };
+
+        window.confirmDeck = () => {
+            if (mode === 'cpu') {
+                opponentDeck = ['✊','✌️','🖐️','✨','🪞'].sort(() => Math.random() - 0.5).slice(0,3);
+                showScreen('battle');
+                renderHands();
+                document.getElementById('status-msg').innerText = "CPUが相手です。手を選んで！";
+            } else {
+                set(ref(db, `${roomPath}/${myRole}_deck`), myDeck);
+                showScreen('battle');
+                document.getElementById('status-msg').innerText = "相手のデッキ選択を待機中...";
+                onValue(ref(db, roomPath), (snap) => {
+                    const d = snap.val();
+                    if(d.p1_deck && d.p2_deck) {
+                        opponentDeck = (myRole === "p1") ? d.p2_deck : d.p1_deck;
+                        document.getElementById('status-msg').innerText = "バトル開始！手を選んで！";
+                        renderHands();
+                        listenOpponent();
+                    }
+                });
+            }
+        };
+
+        function listenOpponent() {
+            const oppRole = (myRole === "p1") ? "p2" : "p1";
+            onValue(ref(db, `${roomPath}/${oppRole}_move`), (snap) => {
+                const move = snap.val();
+                if (move && move.turn === turn) {
+                    processTurn(move.card);
+                }
+            });
+        }
+
+        window.playTurn = (idx) => {
+            if (myMove !== null) return;
+            myMove = myDeck[idx];
+            if (mode === 'cpu') {
+                processTurn(opponentDeck[turn]);
+            } else {
+                set(ref(db, `${roomPath}/${myRole}_move`), { card: myMove, turn: turn });
+                document.getElementById('status-msg').innerText = "相手の選択を待っています...";
+            }
+        };
+
+        function processTurn(oppCard) {
+            const res = judge(myMove, oppCard);
+            if(res === "勝利") wins++;
+            logs.push(`第${turn+1}戦: ${myMove} vs ${oppCard} -> ${res}`);
+            document.getElementById('status-msg').innerHTML = `<span style="font-size:1.5rem">${myMove} vs ${oppCard}</span><br>${res}！`;
+            
+            myMove = null;
+            turn++;
+            setTimeout(() => {
+                if (turn < 3) {
+                    renderHands();
+                    document.getElementById('status-msg').innerText = "次の手を選んで！";
+                } else {
+                    showResult();
+                }
+            }, 2000);
+        }
+
+        function judge(p1, p2) {
+            if (p1 === p2) return "引き分け";
+            if (p1 === '✨') return p2 === '🪞' ? "敗北" : "勝利";
+            if (p1 === '🪞') return p2 === '✨' ? "勝利" : "敗北";
+            if (p2 === '✨') return "敗北";
+            if (p2 === '🪞') return "勝利";
+            const winMap = {'✊':'✌️', '✌️':'🖐️', '🖐️':'✊'};
+            return winMap[p1] === p2 ? "勝利" : "敗北";
+        }
+
+        function renderHands() {
+            const pUI = document.getElementById('player-hand-ui');
+            const cUI = document.getElementById('cpu-hand-ui');
+            pUI.innerHTML = ""; cUI.innerHTML = "";
+            myDeck.forEach((card, i) => {
+                const d = document.createElement('div');
+                d.className = `card ${i < turn ? 'disabled' : ''}`;
+                d.innerHTML = card;
+                if(i >= turn) d.onclick = () => playTurn(i);
+                pUI.appendChild(d);
+            });
+            for(let i=0; i<3; i++) {
+                const d = document.createElement('div');
+                d.className = `card back ${i < turn ? 'disabled' : ''}`;
+                d.innerHTML = i < turn ? opponentDeck[i] : "？";
+                cUI.appendChild(d);
+            }
+        }
+
+        function showScreen(id) {
+            document.querySelectorAll('.panel').forEach(p => p.classList.add('hidden'));
+            document.getElementById('screen-' + id).classList.remove('hidden');
+        }
+
+        function showResult() {
+            showScreen('result');
+            document.getElementById('res-title').innerText = wins >= 2 ? "総合勝利！🏆" : "敗退...💀";
+            document.getElementById('res-log').innerHTML = logs.join("<br>");
+        }
+    </script>
+</body>
+</html>
